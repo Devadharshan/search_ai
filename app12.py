@@ -1,25 +1,57 @@
+import os
+import gc
+import torch
+from transformers import LlamaForCausalLM, LlamaTokenizer, LlamaConfig
 from fastapi import FastAPI, Query
 from pathlib import Path
 import gzip
 import re
 import rapidfuzz
-import torch
-from transformers import LlamaForCausalLM, LlamaTokenizer
-import time
 from typing import List, Dict
 
+# ✅ Free up memory before loading model
+gc.collect()
+torch.cuda.empty_cache()
+
+# ✅ Define Paths
+MODEL_DIR = "C:/path_to_your_model"
+MODEL_FILE = os.path.join(MODEL_DIR, "consolidated.00.pth")
+TOKENIZER_FILE = os.path.join(MODEL_DIR, "tokenizer.model")
+
+# ✅ Load Tokenizer (Lazy Load to Reduce Memory Usage)
+tokenizer = LlamaTokenizer.from_pretrained(MODEL_DIR)
+
+# ✅ Load Model Configuration (Optimized for CPU)
+config = LlamaConfig(
+    hidden_size=4096, 
+    num_attention_heads=32, 
+    num_hidden_layers=40, 
+    intermediate_size=11008
+)
+
+# ✅ Initialize Model with Optimized Memory Settings
+model = LlamaForCausalLM(config)
+
+# ✅ Load State Dict Efficiently (Convert to bfloat16 to Reduce Memory)
+state_dict = torch.load(MODEL_FILE, map_location="cpu")
+state_dict = {k: v.to(dtype=torch.bfloat16) for k, v in state_dict.items()}  # ⚡ Optimized for CPU
+
+# ✅ Handle Missing Keys
+missing, unexpected = model.load_state_dict(state_dict, strict=False)
+print(f"🔍 Missing Keys: {missing}")
+print(f"🔍 Unexpected Keys: {unexpected}")
+
+# ✅ Move Model to CPU with Controlled Memory Usage
+device = "cpu"
+model.to(device)
+
+print("✅ Model Loaded Successfully!")
+
+# =========================
+# 🚀 FastAPI Log Search Backend
+# =========================
 app = FastAPI()
-LOG_DIR = "logs"  # Change this to your actual log directory
-
-# Load AI Model
-MODEL_PATH = "C:/path_to_your_model/"  # Update with your actual model directory
-TOKENIZER_PATH = f"{MODEL_PATH}/tokenizer.model"
-MODEL_FILE = f"{MODEL_PATH}/consolidated.00.pth"
-
-# Load Tokenizer & Model
-tokenizer = LlamaTokenizer.from_pretrained(TOKENIZER_PATH)
-model = LlamaForCausalLM.from_pretrained(MODEL_PATH, torch_dtype=torch.float16, device_map="auto")
-model.load_state_dict(torch.load(MODEL_FILE, map_location="cpu"))
+LOG_DIR = "logs"  # Directory where log files are stored
 
 def read_logs_from_directory(directory: str) -> Dict[str, List[str]]:
     logs = {}
@@ -51,31 +83,20 @@ def group_multiline_logs(lines: List[str]) -> List[str]:
     
     return grouped_logs
 
-def search_logs(logs: Dict[str, List[str]], keyword: str) -> Dict[str, List[Dict]]:
-    results = {}
-    total_occurrences = 0
+def search_logs(logs: Dict[str, List[str]], keyword: str) -> List[Dict]:
+    results = []
     for filename, entries in logs.items():
-        file_results = []
-        file_occurrences = 0
         for entry in entries:
-            match_count = entry.lower().count(keyword.lower())
-            if match_count > 0:
+            if rapidfuzz.fuzz.partial_ratio(keyword.lower(), entry.lower()) > 75:
                 timestamp = extract_timestamp(entry)
                 service_call = extract_service_call(entry)
-                file_results.append({
+                results.append({
                     "file": filename,
                     "timestamp": timestamp,
                     "log_entry": entry,
-                    "service_call": service_call,
-                    "occurrences": match_count
+                    "service_call": service_call
                 })
-                file_occurrences += match_count
-        
-        if file_results:
-            results[filename] = file_results
-            total_occurrences += file_occurrences
-    
-    return {"total_occurrences": total_occurrences, "results": results}
+    return results
 
 def extract_timestamp(log_entry: str) -> str:
     match = re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', log_entry)
@@ -85,30 +106,18 @@ def extract_service_call(log_entry: str) -> str:
     match = re.search(r'Calling service: ([\w-]+)', log_entry)
     return match.group(1) if match else "None"
 
-def generate_ai_summary(keyword: str, logs: Dict) -> str:
-    """ AI analyzes logs and generates a summary """
-    log_text = "\n".join([" ".join(item['log_entry']) for key, value in logs['results'].items() for item in value])
-    input_text = f"Analyze the following logs for keyword '{keyword}': {log_text[:1000]}..."  # Limit input length
+def generate_ai_insights(logs: List[Dict]) -> str:
+    if not logs:
+        return "No insights available."
     
-    inputs = tokenizer(input_text, return_tensors="pt", truncation=True, max_length=2048).to("cpu")
-    with torch.no_grad():
-        output = model.generate(**inputs, max_length=512)
-    
-    return tokenizer.decode(output[0], skip_special_tokens=True)
+    prompt = "Analyze the following logs and summarize key insights and potential issues:\n" + "\n".join([log['log_entry'] for log in logs[:5]])
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+    outputs = model.generate(**inputs, max_new_tokens=150)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 @app.get("/search")
 def search(query: str = Query(..., title="Search Keyword")):
-    start_time = time.time()
     logs = read_logs_from_directory(LOG_DIR)
-    search_results = search_logs(logs, query)
-    
-    ai_summary = generate_ai_summary(query, search_results)
-    end_time = time.time()
-    
-    return {
-        "query": query,
-        "total_occurrences": search_results["total_occurrences"],
-        "search_time_seconds": round(end_time - start_time, 2),
-        "results": search_results["results"],
-        "ai_analysis": ai_summary
-    }
+    results = search_logs(logs, query)
+    ai_insights = generate_ai_insights(results)
+    return {"query": query, "matches": len(results), "results": results, "ai_insights": ai_insights}
