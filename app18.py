@@ -103,14 +103,29 @@ def generate_ai_insights(logs: List[Dict]) -> str:
         return "No insights available."
 
     prompt = "Summarize key issues in the following logs:\n" + "\n".join([log['log_entry'] for log in logs[:5]])
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=model.config.n_positions)
 
-    # Token validation for safety
-    if inputs['input_ids'].max().item() >= model.config.vocab_size:
-        return "Token ID exceeds model vocab size. Please verify tokenizer and model compatibility."
+    try:
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
 
-    outputs = model.generate(**inputs, max_new_tokens=100)
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+        # Safe check: all tokens must be within vocab
+        if torch.any(inputs['input_ids'] >= model.config.vocab_size):
+            return "Token ID exceeds model vocab size. Tokenizer might not match model."
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=100,
+                do_sample=True,
+                top_k=50,
+                top_p=0.95,
+                temperature=0.7
+            )
+        return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    except IndexError as e:
+        return f"Token Index Error: {str(e)}"
+    except Exception as e:
+        return f"AI Insight Generation Failed: {str(e)}"
 
 @app.get("/search")
 def search(query: str = Query(..., title="Search Keyword"), include_ai: bool = Query(False, title="Include AI Insights")):
