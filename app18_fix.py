@@ -71,7 +71,8 @@ def search_logs(logs: Dict[str, List[str]], keyword: str) -> List[Dict]:
         if rapidfuzz.fuzz.partial_ratio(keyword.lower(), entry.lower()) > 75:
             return {
                 "timestamp": extract_timestamp(entry),
-                "service_call": extract_service_call(entry)
+                "service_call": extract_service_call(entry),
+                "filename": filename
             }
         return None
 
@@ -101,8 +102,10 @@ def generate_ai_insights(logs: List[str]) -> str:
         return "No insights available."
 
     try:
-        prompt_lines = logs[:3]  # Take first 3 entries
-        prompt = "Summarize the following service issues:\n" + "\n".join(prompt_lines)
+        # Use top 10 frequent service calls or error lines
+        lines_by_score = sorted(logs, key=lambda x: len(x), reverse=True)[:5]
+        prompt = "Summarize the following service issues for a support engineer:
+" + "\n".join(lines_by_score)
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
 
         input_ids = inputs["input_ids"]
@@ -128,5 +131,7 @@ def generate_ai_insights(logs: List[str]) -> str:
 @app.get("/search")
 def search(query: str = Query(..., title="Search Keyword"), include_ai: bool = Query(False, title="Include AI Insights")):
     results = search_logs(cached_logs, query)
-    ai_insights = generate_ai_insights([f"{r['timestamp']} - {r['service_call']}" for r in results]) if include_ai and results else ""
+    # Only extract necessary parts for AI insight
+    ai_lines = [f"{r['timestamp']} - {r['service_call']} from {r['filename']}" for r in results]
+    ai_insights = generate_ai_insights(ai_lines) if include_ai and results else ""
     return {"query": query, "matches": len(results), "results": results, "ai_insights": ai_insights}
