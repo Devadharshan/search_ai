@@ -3,22 +3,20 @@ def generate_ai_insights(logs: List) -> str:
         return "No insights available."
 
     try:
-        # Safely construct summary input
+        # Build prompt text from logs
         if isinstance(logs[0], dict):
-            summary_lines = [f"{log.get('timestamp', '')} - {log.get('service_call', '')}" for log in logs]
+            summary_lines = [f"{log.get('timestamp', '')} - {log.get('service_call', '')}" for log in logs[:5]]
         else:
-            summary_lines = logs[:5]  # fallback to raw lines if not dicts
+            summary_lines = logs[:5]
 
-        # Join and truncate to fit within GPT-2 token limits
-        full_text = "\n".join(summary_lines)
-        truncated_text = full_text[:2000]
-        prompt = "Summarize the following logs to find key issues:\n" + truncated_text
+        prompt = "Summarize the following logs to identify key issues:\n" + "\n".join(summary_lines)
 
+        # Tokenize safely
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=tokenizer.model_max_length)
         input_ids = inputs["input_ids"]
 
-        if torch.any(input_ids >= model.config.vocab_size):
-            return "AI Insight Generation Failed: token index out of range."
+        # Fix: Remove any token IDs that exceed model's vocab size
+        input_ids[input_ids >= model.config.vocab_size] = tokenizer.unk_token_id
 
         with torch.no_grad():
             outputs = model.generate(
