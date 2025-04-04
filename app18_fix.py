@@ -1,34 +1,35 @@
-def generate_ai_insights(logs: List) -> str:
+def generate_ai_insights(logs: List[Dict]) -> str:
     if not logs:
         return "No insights available."
 
     try:
-        # Build prompt text from logs
-        if isinstance(logs[0], dict):
-            summary_lines = [f"{log.get('timestamp', '')} - {log.get('service_call', '')}" for log in logs[:5]]
-        else:
-            summary_lines = logs[:5]
+        # Use only timestamp and service name
+        prompt_lines = [
+            f"{log.get('timestamp', 'Unknown')} - {log.get('service_call', 'None')}"
+            for log in logs[:3]
+        ]
+        prompt = "Summarize the following service issues:\n" + "\n".join(prompt_lines)
 
-        prompt = "Summarize the following logs to identify key issues:\n" + "\n".join(summary_lines)
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
 
-        # Tokenize safely
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=tokenizer.model_max_length)
         input_ids = inputs["input_ids"]
 
-        # Fix: Remove any token IDs that exceed model's vocab size
-        input_ids[input_ids >= model.config.vocab_size] = tokenizer.unk_token_id
+        # Check for valid input
+        if input_ids.size(1) == 0:
+            return "AI Insight Generation Failed: Empty input after tokenization."
 
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = model.generate(
                 input_ids=input_ids,
-                max_new_tokens=100,
-                do_sample=True,
-                top_k=50,
-                top_p=0.95,
-                temperature=0.7
+                max_new_tokens=50,
+                do_sample=False
             )
 
         return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
+    except RuntimeError as re:
+        if "out of memory" in str(re).lower():
+            return "AI Insight Generation Failed: Not enough memory."
+        return f"AI Insight Generation Failed: {str(re)}"
     except Exception as e:
         return f"AI Insight Generation Failed: {str(e)}"
