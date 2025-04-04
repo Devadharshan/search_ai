@@ -15,7 +15,7 @@ gc.collect()
 torch.cuda.empty_cache()
 
 # Load GPT-2 Tokenizer and Model
-MODEL_DIR = "path_to_your_gpt2_model"  # 🔁 Replace with your local GPT-2 folder path
+MODEL_DIR = "path_to_your_gpt2_model"  # Replace with your local GPT-2 folder path
 tokenizer = GPT2Tokenizer.from_pretrained(MODEL_DIR)
 model = GPT2LMHeadModel.from_pretrained(MODEL_DIR)
 model.eval()
@@ -103,7 +103,12 @@ def generate_ai_insights(logs: List[Dict]) -> str:
         return "No insights available."
 
     prompt = "Summarize key issues in the following logs:\n" + "\n".join([log['log_entry'] for log in logs[:5]])
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=model.config.n_positions)
+
+    # Token validation for safety
+    if inputs['input_ids'].max().item() >= model.config.vocab_size:
+        return "Token ID exceeds model vocab size. Please verify tokenizer and model compatibility."
+
     outputs = model.generate(**inputs, max_new_tokens=100)
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
