@@ -21,8 +21,6 @@ model = GPT2LMHeadModel.from_pretrained(MODEL_DIR)
 model.eval()
 model.to("cpu")
 
-print("GPT-2 Model Loaded Successfully!")
-
 app = FastAPI()
 LOG_DIR = "logs"  # Directory where log files are stored
 cached_logs: Dict[str, List[str]] = {}  # Global log cache
@@ -30,9 +28,7 @@ cached_logs: Dict[str, List[str]] = {}  # Global log cache
 @app.on_event("startup")
 def load_logs():
     global cached_logs
-    print("Reading logs on startup...")
     cached_logs = read_logs_from_directory(LOG_DIR)
-    print(f"Loaded logs from {len(cached_logs)} files.")
 
 def read_logs_from_directory(directory: str) -> Dict[str, List[str]]:
     logs = {}
@@ -108,7 +104,6 @@ def generate_ai_insights(logs: List[str]) -> str:
         return "No insights available."
 
     try:
-        # Combine all logs into a single prompt for full context
         full_log_text = "\n".join(logs)
 
         prompt = (
@@ -132,7 +127,9 @@ def generate_ai_insights(logs: List[str]) -> str:
                 do_sample=False
             )
 
-        return tokenizer.decode(outputs[0], skip_special_tokens=True)
+        decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        response_text = decoded[len(prompt):].strip()
+        return response_text if response_text else "AI Insight Generation Failed: No useful content."
 
     except RuntimeError as re:
         if "out of memory" in str(re).lower():
@@ -144,6 +141,8 @@ def generate_ai_insights(logs: List[str]) -> str:
 @app.get("/search")
 def search(query: str = Query(..., title="Search Keyword"), include_ai: bool = Query(False, title="Include AI Insights")):
     results = search_logs(cached_logs, query)
-    ai_lines = [r["log"] for r in results]
-    ai_insights = generate_ai_insights(ai_lines) if include_ai and results else ""
+    ai_lines = [r["log"] for r in results if "log" in r]
+    ai_insights = generate_ai_insights(ai_lines) if include_ai and ai_lines else ""
+    for r in results:
+        r.pop("log", None)  # Remove full log from response
     return {"query": query, "matches": len(results), "results": results, "ai_insights": ai_insights}
