@@ -70,7 +70,6 @@ def search_logs(logs: Dict[str, List[str]], keyword: str) -> List[Dict]:
     def search_in_entry(entry: str, filename: str):
         if rapidfuzz.fuzz.partial_ratio(keyword.lower(), entry.lower()) > 75:
             return {
-                "file": filename,
                 "timestamp": extract_timestamp(entry),
                 "log_entry": entry,
                 "service_call": extract_service_call(entry)
@@ -102,28 +101,25 @@ def generate_ai_insights(logs: List[Dict]) -> str:
     if not logs:
         return "No insights available."
 
-    prompt_lines = [log['log_entry'] for log in logs[:20]]
+    prompt_lines = [log['log_entry'] for log in logs[:5]]
     prompt = "Summarize key issues in the following logs:\n" + "\n".join(prompt_lines)
 
     try:
-        # Tokenize with safe truncation for GPT-2
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=tokenizer.model_max_length)
         input_ids = inputs["input_ids"]
 
-        # Clamp token values within vocab range
-        input_ids = torch.clamp(input_ids, min=0, max=model.config.vocab_size - 1)
-        inputs["input_ids"] = input_ids
+        if torch.any(input_ids >= model.config.vocab_size):
+            return "AI Insight Generation Failed: input index exceeds vocabulary size."
 
         with torch.no_grad():
             outputs = model.generate(
-                **inputs,
+                input_ids=input_ids,
                 max_new_tokens=100,
                 do_sample=True,
                 top_k=50,
                 top_p=0.95,
                 temperature=0.7
             )
-
         return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
     except Exception as e:
