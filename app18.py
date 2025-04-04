@@ -71,7 +71,6 @@ def search_logs(logs: Dict[str, List[str]], keyword: str) -> List[Dict]:
         if rapidfuzz.fuzz.partial_ratio(keyword.lower(), entry.lower()) > 75:
             return {
                 "timestamp": extract_timestamp(entry),
-                "log_entry": entry,
                 "service_call": extract_service_call(entry)
             }
         return None
@@ -101,10 +100,9 @@ def generate_ai_insights(logs: List[Dict]) -> str:
     if not logs:
         return "No insights available."
 
-    prompt_lines = [log['log_entry'] for log in logs[:5]]
-    prompt = "Summarize key issues in the following logs:\n" + "\n".join(prompt_lines)
-
     try:
+        prompt_lines = [str(log) for log in logs[:5]]
+        prompt = "Summarize key issues in the following logs:\n" + "\n".join(prompt_lines)
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=tokenizer.model_max_length)
         input_ids = inputs["input_ids"]
 
