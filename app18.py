@@ -64,22 +64,19 @@ def group_multiline_logs(lines: List[str]) -> List[str]:
 
     return grouped_logs
 
-def search_logs(logs: Dict[str, List[str]], keyword: str) -> List[Dict]:
+def search_logs(logs: Dict[str, List[str]], keyword: str) -> List[str]:
     results = []
 
-    def search_in_entry(entry: str, filename: str):
+    def search_in_entry(entry: str):
         if rapidfuzz.fuzz.partial_ratio(keyword.lower(), entry.lower()) > 75:
-            return {
-                "timestamp": extract_timestamp(entry),
-                "service_call": extract_service_call(entry)
-            }
+            return entry
         return None
 
     with ThreadPoolExecutor() as executor:
         futures = []
-        for filename, entries in logs.items():
+        for entries in logs.values():
             for entry in entries:
-                futures.append(executor.submit(search_in_entry, entry, filename))
+                futures.append(executor.submit(search_in_entry, entry))
 
         for future in as_completed(futures):
             result = future.result()
@@ -88,21 +85,13 @@ def search_logs(logs: Dict[str, List[str]], keyword: str) -> List[Dict]:
 
     return results
 
-def extract_timestamp(log_entry: str) -> str:
-    match = re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', log_entry)
-    return match.group(0) if match else "Unknown"
-
-def extract_service_call(log_entry: str) -> str:
-    match = re.search(r'Calling service: ([\w-]+)', log_entry)
-    return match.group(1) if match else "None"
-
-def generate_ai_insights(logs: List[Dict]) -> str:
-    if not logs:
+def generate_ai_insights(entries: List[str]) -> str:
+    if not entries:
         return "No insights available."
 
     try:
-        prompt_lines = [str(log) for log in logs[:5]]
-        prompt = "Summarize key issues in the following logs:\n" + "\n".join(prompt_lines)
+        text_chunk = "\n".join(entries)
+        prompt = f"Analyze the following logs and provide insights and issues:\n{text_chunk}"
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=tokenizer.model_max_length)
         input_ids = inputs["input_ids"]
 
@@ -112,7 +101,7 @@ def generate_ai_insights(logs: List[Dict]) -> str:
         with torch.no_grad():
             outputs = model.generate(
                 input_ids=input_ids,
-                max_new_tokens=100,
+                max_new_tokens=150,
                 do_sample=True,
                 top_k=50,
                 top_p=0.95,
@@ -125,6 +114,6 @@ def generate_ai_insights(logs: List[Dict]) -> str:
 
 @app.get("/search")
 def search(query: str = Query(..., title="Search Keyword"), include_ai: bool = Query(False, title="Include AI Insights")):
-    results = search_logs(cached_logs, query)
-    ai_insights = generate_ai_insights(results) if include_ai and results else ""
-    return {"query": query, "matches": len(results), "results": results, "ai_insights": ai_insights}
+    matches = search_logs(cached_logs, query)
+    ai_insights = generate_ai_insights(matches) if include_ai and matches else ""
+    return {"query": query, "matches": len(matches), "ai_insights": ai_insights}
