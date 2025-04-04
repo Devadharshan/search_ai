@@ -102,14 +102,17 @@ def generate_ai_insights(logs: List[Dict]) -> str:
     if not logs:
         return "No insights available."
 
-    prompt = "Summarize key issues in the following logs:\n" + "\n".join([log['log_entry'] for log in logs[:5]])
+    prompt_lines = [log['log_entry'] for log in logs[:20]]
+    prompt = "Summarize key issues in the following logs:\n" + "\n".join(prompt_lines)
 
     try:
+        # Tokenize with safe truncation for GPT-2
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+        input_ids = inputs["input_ids"]
 
-        # Safe check: all tokens must be within vocab
-        if torch.any(inputs['input_ids'] >= model.config.vocab_size):
-            return "Token ID exceeds model vocab size. Tokenizer might not match model."
+        # Clamp token values within vocab range
+        input_ids = torch.clamp(input_ids, min=0, max=model.config.vocab_size - 1)
+        inputs["input_ids"] = input_ids
 
         with torch.no_grad():
             outputs = model.generate(
@@ -120,10 +123,9 @@ def generate_ai_insights(logs: List[Dict]) -> str:
                 top_p=0.95,
                 temperature=0.7
             )
+
         return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    except IndexError as e:
-        return f"Token Index Error: {str(e)}"
     except Exception as e:
         return f"AI Insight Generation Failed: {str(e)}"
 
