@@ -1,0 +1,70 @@
+import requests
+from datetime import datetime, timedelta
+import pytz
+import csv
+
+# === Configuration ===
+SERVICE_ID = 'your_service_id'  # Replace with your PagerDuty service ID
+PROXY_URL = "http://your.proxy.url:port"  # Replace with your proxy URL
+CSV_FILE = 'pagerduty_incidents.csv'
+
+# === Date Range (Last 24 hours) ===
+now = datetime.utcnow().replace(tzinfo=pytz.UTC)
+since = now - timedelta(hours=24)
+
+# === Request Setup ===
+headers = {
+    'Accept': 'application/vnd.pagerduty+json;version=2'
+}
+
+params = {
+    'service_ids[]': SERVICE_ID,
+    'since': since.isoformat(),
+    'until': now.isoformat(),
+    'time_zone': 'UTC',
+    'limit': 100  # PagerDuty default is 25, max is 100 per page
+}
+
+proxies = {
+    "http": PROXY_URL,
+    "https": PROXY_URL
+}
+
+url = 'https://api.pagerduty.com/incidents'
+all_incidents = []
+
+# === Fetching incidents ===
+while url:
+    response = requests.get(url, headers=headers, params=params, proxies=proxies)
+    if response.status_code == 200:
+        data = response.json()
+        incidents = data.get('incidents', [])
+        all_incidents.extend(incidents)
+
+        # Pagination
+        next_link = next((link['href'] for link in data.get('links', []) if link.get('rel') == 'next'), None)
+        url = next_link
+        params = {}  # Clear params for next page request
+    else:
+        print("Error fetching incidents:", response.status_code, response.text)
+        break
+
+# === Write to CSV ===
+if all_incidents:
+    with open(CSV_FILE, 'w', newline='', encoding='utf-8') as csvfile:
+        fieldnames = ['id', 'title', 'status', 'created_at', 'html_url']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for inc in all_incidents:
+            writer.writerow({
+                'id': inc.get('id'),
+                'title': inc.get('title'),
+                'status': inc.get('status'),
+                'created_at': inc.get('created_at'),
+                'html_url': inc.get('html_url')
+            })
+
+    print(f"{len(all_incidents)} incident(s) written to {CSV_FILE}")
+else:
+    print("No incidents found in the last 24 hours.")
